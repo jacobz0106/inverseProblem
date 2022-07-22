@@ -36,16 +36,71 @@ def integral(lambda1, lambda2,lambda3,T,n):
     #Riemann sum approxiamation left sided
     return (1/T)*np.sum(np.sum(function_y(lambda1, lambda2,lambda3,T,n),axis = 1)*T/n )
 
+##
+def dy_dlambda1_t(lambda1, lambda2,lambda3,T,n):
+    ls = np.zeros((n,2))
+    ls[0] = (0,0)
+    t = 0
+    F = function_y(lambda1, lambda2,lambda3, T,n)
+    for i in range(1,n):
+        t += T/n
+        Y = F[i]
+        def equations(vars):
+            y1,y2 = vars
+            eq1=  T/n * (1 + 2*Y[0]*Y[1]*y1 + Y[0]**2*y2 - lambda2*y1 - y1)  + ls[i-1][0] - y1
+            eq2=  T/n * (lambda2*y1 - 2*Y[0]*Y[1]*y1 - Y[0]**2*y2) + ls[i-1][1] - y2
+            return [eq1, eq2]
+        ls[i] = fsolve(equations, ls[i-1])
+    return ls
+
+def dy_dlambda2_t(lambda1, lambda2,lambda3,T,n):
+    ls = np.zeros((n,2))
+    ls[0] = (0,0)
+    t = 0
+    F = function_y(lambda1, lambda2,lambda3, T,n)
+    for i in range(1,n):
+        t += T/n
+        Y = F[i]
+        def equations(vars):
+            y1,y2 = vars
+            eq1=  T/n * (2*Y[0]*Y[1]*y1 + Y[0]**2*y2 - Y[0]-lambda2*y1 - y1)  + ls[i-1][0] - y1
+            eq2=  T/n * (Y[0] + lambda2*y1 - 2*Y[0]*Y[1]*y1 - Y[0]**2*y2) + ls[i-1][1] - y2
+            return [eq1, eq2]
+        ls[i] = fsolve(equations, ls[i-1])
+    return ls
+
+def dQ_dlambda(lambda1, lambda2,lambda3 = 1.65,T = 5,n = 100):
+    sum1 = (1/T)*np.sum(np.sum(dy_dlambda1_t(lambda1, lambda2,lambda3,T,n),axis = 1)*T/n )
+    sum2 = (1/T)*np.sum(np.sum(dy_dlambda2_t(lambda1, lambda2,lambda3,T,n),axis = 1)*T/n )
+    return np.array([sum1,sum2])
+
+
 integral_vec = np.vectorize(integral)
 A_x = [1,1.2]
 A_y = [3,3.1]
 
+
+def Brusselator_Data(n, sep = 10):
+    X = np.random.uniform(0.7, 1.5, n)
+    Y = np.random.uniform(2.75, 3.25, n)
+    integral_vec = np.vectorize(integral)
+    def integrals(lambda1, lambda3 = 1.65,T = 5,n = 100):
+        #Riemann sum approxiamation left sided
+        return (1/T)*np.sum(np.sum(function_y(lambda1[0], lambda1[1],lambda3,T,n),axis = 1)*T/n )
+    df=pd.DataFrame(data={"X":X,"Y":Y})
+    Z = df.apply(integrals, axis = 1)
+    min_value = min(Z)
+    max_value = max(Z)
+    increment = (max_value - min_value)/sep
+    df['Z'] = np.zeros(n)
+    for i in range(sep):
+        index = np.logical_and( Z >= min_value + increment*i,  Z <= min_value + increment*(i+1))
+        df['Z'][index] = i
+    return df
+
+
 #### not used, validation purpose
-def getProb(n,sep = 10, A_x,Ay, D_lower= 3.7, D_upper = 4.0):
-        """ 
-    n: number of line spaces used to evaluate the intergral
-    return numerical approximation of P_A by exhausive method
-    """
+def getProb(n,sep = 10, Ax= [1,1.2],Ay= [3,3.1], D_lower= 3.7, D_upper = 4.0):
     data = np.random.uniform(low=[0.7,2.75], high=[1.5,3.25], size=(n,2))
     sZ = integral_vec(data[:,0], data[:,1], 1.65,5,50)
     df = pd.DataFrame(data = {'X':data[:,0], 'Y':data[:,1], 'Z':sZ})
@@ -98,7 +153,7 @@ def merge(I,I_lower,I_upper,loc):
         I[I==unique[loc]] = unique[loc-1]
    
 ## validation function, not used     
-def Min_Sample(n, sep = 10, D_lower, D_upper):
+def Min_Sample(n, sep = 10, D_lower= 3.7, D_upper = 4.0):
     number = np.repeat(0.0,sep)
     for j in range(10):
         data = np.random.uniform(low=[0.7,2.75], high=[1.5,3.25], size=(n,2))
@@ -115,21 +170,22 @@ def Min_Sample(n, sep = 10, D_lower, D_upper):
     return number
 
 ###
-def Classify(df1, df2, I, method = 'regression'):
+def Classify(df1, df2, I, method = 'regression', args = []):
     I2 = np.zeros(( len(np.unique(I)-1),len(df2) ))
     train = df1[['X','Y']]
     test = df2[['X','Y']]
     pair_label = I==np.unique(I)[0]
     for cla in range(len(np.unique(I))-1):
         pair_label = I <= np.unique(I)[cla]
-        model = CBPClassifier(df1[['X','Y']].values, pair_label, frac = 0.6 , kind = method)
+        model = CBPClassifier(df1[['X','Y']].values, pair_label)
+        model.fit(method, args)
         I2[cla] = model.predict(df2[['X','Y']].values)
     pred = np.repeat(0, len(df2))
     for i in range(len(np.unique(I))):
         pred[np.logical_and(I2[i] == False, pred == 0)] = np.unique(I)[i]
     return pred
 
-def Cal_prob(df, I, I_upper, I_lower, Ax, Ay, D_lower = 3.7, D_upper = 4.0):
+def Cal_prob(df, I, I_upper, I_lower, Ax= [1,1.2],Ay= [3,3.1], D_lower = 3.7, D_upper = 4.0):
     prob = 0
     for i in range( len(np.unique(df['Z'])) ):
         if I_upper[I == np.unique(df['Z'])[i]][0] <= D_lower:
@@ -156,7 +212,7 @@ def Cal_prob(df, I, I_upper, I_lower, Ax, Ay, D_lower = 3.7, D_upper = 4.0):
 
 
 # Main function
-def getProb_ML(n,s,sep = 10,c = 10, rep = 10, method = 'regression', sample_method = 'random', Ax , Ay, D_lower = 3.7, D_upper = 4.0):
+def getProb_ML(n,s,sep = 10,c = 10, rep = 10, method = 'regression', sample_method = 'random', Ax= [1,1.2],Ay= [3,3.1], D_lower = 3.7, D_upper = 4.0, args = []):
     Prob_Exhaus = np.repeat(0.0,rep)
     prob_knn = np.repeat(0.0,rep)
     prob_model = np.repeat(0.0,rep)
@@ -205,7 +261,7 @@ def getProb_ML(n,s,sep = 10,c = 10, rep = 10, method = 'regression', sample_meth
         neigh.fit(df1[['X','Y']], I)
     
         df2_knn = pd.DataFrame(data = {'X':pred['X'], 'Y':pred['Y'], 'Z':neigh.predict(pred)} )
-        df2_model =  pd.DataFrame(data = {'X':pred['X'], 'Y':pred['Y'], 'Z':Classify(df1[['X','Y']],pred,I, method) } )
+        df2_model =  pd.DataFrame(data = {'X':pred['X'], 'Y':pred['Y'], 'Z':Classify(df1[['X','Y']],pred,I, method, args) } )
         df1['Z'] = I
         frame1 = [df1,df2_knn]
         frame2 = [df1,df2_model]
