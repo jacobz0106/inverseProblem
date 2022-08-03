@@ -75,6 +75,8 @@ class CBP(object):
         '''
         Train the model, input nXd matrix A_train and 1Xn matrix labels
         '''
+        self.points = []
+        self.midpoints = []
         self._Euc(A_train, C_train)
         for i in np.where(np.array(C_train) == 1)[0]:
           pointSet = np.where(np.array(C_train) == 0)[0]
@@ -150,7 +152,10 @@ class CBPClassifier(object):
     self.transformer = LabelEncode([0,1])
     self.transformer.fit(C_train)
     self.C_train = self.transformer.transform(C_train)
-
+    self.GB = []
+    self.gradient = []
+    self.gradient_upper = []
+    self.gradient_lower = []
     self._train(A_train, self.C_train)
     self.A_train = A_train
 
@@ -180,8 +185,14 @@ class CBPClassifier(object):
     elif self.kind =='1dSpline':
       filtered0 = np.copy(self.upper)
       filtered1 = np.copy(self.lower)
-      self.model_upper =interpolate.interp1d( np.array(filtered0[:,:-1]).reshape(-1),  np.array(filtered0[:,-1]).reshape(-1),fill_value = "extrapolate", kind = args[0])
-      self.model_lower =interpolate.interp1d( np.array(filtered1[:,:-1]).reshape(-1),  np.array(filtered1[:,-1]).reshape(-1),fill_value = "extrapolate", kind = args[0])
+      self.model_upper =interpolate.interp1d( np.array(filtered0[:,:-1]).reshape(-1),  np.array(filtered0[:,-1]).reshape(-1),fill_value = "extrapolate")
+      self.model_lower =interpolate.interp1d( np.array(filtered1[:,:-1]).reshape(-1),  np.array(filtered1[:,-1]).reshape(-1),fill_value = "extrapolate")
+      
+    elif self.kind == 'NdSpline':
+      filtered0 = np.copy(self.upper)
+      filtered1 = np.copy(self.lower)
+      self.model_upper =interpolate.LinearNDInterpolator( filtered0[:,:-1],filtered0[:,-1])
+      self.model_lower =interpolate.LinearNDInterpolator( filtered1[:,:-1],filtered1[:,-1])
 
     elif self.kind =='PPR':
       self.model_upper = ProjectionPursuitRegressor(r = self.model_parameter[0],degree = self.model_parameter[1])
@@ -207,6 +218,11 @@ class CBPClassifier(object):
       tck_lower,u = interpolate.splprep([x,y],k=self.model_parameter[2],s=self.model_parameter[3])
       self.tck_lower = tck_lower
 
+    elif self.kind == 'gradient':
+      self.gradient = args[1]
+      self.gradient_upper = self.gradient[np.unique(np.array(self.cbp.points)[:,0])]
+
+      self.gradient_lower = self.gradient[np.unique(np.array(self.cbp.points)[:,1])]
 
   def _train(self, A_train, C_train):
     self.cbp = CBP(A_train, C_train)
@@ -242,6 +258,11 @@ class CBPClassifier(object):
   def spline1d_lower(self,x):
     return self.model_lower(x)
 
+  def splineNd_upper(self,x):
+    return self.model_upper.interp(x)
+  def splineNd_lower(self,x):
+    return self.model_lower.interp(x)
+
   def PPR_upper(self,x):
     x = np.array(x).reshape(-1 ,self.d - 1)
     return self.model_upper.predict(x)
@@ -256,7 +277,7 @@ class CBPClassifier(object):
 
   def Gradient_lower(self,x):
     I = Euclidean_distance_vector(x,self.lower[:,0:2])
-    k = self.model_parameter[0]
+    k = self.model_parameter[0][0]
     index = I.argsort()[0:k]
     #define weights
     approximates = np.zeros(k)
@@ -264,9 +285,9 @@ class CBPClassifier(object):
     projecton = np.zeros(k)
     for i in range(len(index)):
       A = self.lower[index[i]][0:2]
-      gradient = dQ_dlambda(A[0], A[1])
+      gradient = self.gradient_lower[index[i]]
       directionVector = x - A
-      orthProj = np.sum(directionVector*gradient)/np.linalg.norm(gradient)
+      orthProj = np.sum(directionVector*gradient)#/np.linalg.norm(gradient)
       distance = Euclidean_distance(x, A)
       projecton[i] = np.abs(orthProj)
       if distance == 0.0:
@@ -279,7 +300,7 @@ class CBPClassifier(object):
 
   def Gradient_upper(self,x):
     I = Euclidean_distance_vector(x,self.upper[:,0:2])
-    k = self.model_parameter[0]
+    k = self.model_parameter[0][0]
     index = I.argsort()[0:k]
     #define weights
     approximates = np.zeros(k)
@@ -287,9 +308,9 @@ class CBPClassifier(object):
     projecton = np.zeros(k)
     for i in range(len(index)):
       A = self.upper[index[i]][0:2]
-      gradient = dQ_dlambda(A[0], A[1])
+      gradient = self.gradient_upper[index[i]]
       directionVector = x - A
-      orthProj = np.sum(directionVector*gradient)/np.linalg.norm(gradient)
+      orthProj = np.sum(directionVector*gradient)#/np.linalg.norm(gradient)
       distance = Euclidean_distance(x, A)
       projecton[i] = np.abs(orthProj)
       if distance == 0.0:
@@ -317,6 +338,8 @@ class CBPClassifier(object):
       return self.gaussian_upper(x)
     elif self.kind == '1dSpline':
       return self.spline1d_upper(x)
+    elif self.kind == 'NdSpline':
+      return self.splineNd_upper(x)
     elif self.kind == 'PPR':
       return self.PPR_upper(x)
     elif self.kind == 'MARS':
@@ -334,6 +357,8 @@ class CBPClassifier(object):
       return self.gaussian_lower(x)
     elif self.kind == '1dSpline':
       return self.spline1d_lower(x)
+    elif self.kind == 'NdSpline':
+      return self.splineNd_lower(x)
     elif self.kind == 'PPR':
       return self.PPR_lower(x)
     elif self.kind == 'MARS':
@@ -370,7 +395,6 @@ class CBPClassifier(object):
     return (x-self.cond_min_lower)*(self.cond_max_lower-x) 
 
   def predictSingle(self, x):
-    x = np.array(x).reshape(-1,self.d)
     if self.kind =='gradient':
       return self.Gradient_upper(x)<= self.Gradient_lower(x)
     elif self.avg == True:
@@ -415,21 +439,26 @@ class CBPClassifier(object):
 
 
   def predict(self, x):
-    predict = np.vectorize(self.predictSingle, signature = '(n)->()')(np.array(x))
+    predict = np.vectorize(self.predictSingle, signature = '(n)->()')(np.array(x).reshape(-1, self.d))
     return self.transformer.transform_back(predict)
+
+
+
+
+
+
 
 # referenced method: linear ensemble 
 class refrenced_method(object):
   '''
   C_train must have label{1, -1}
   '''
-  def __init__(self,A_train, C_train, alpha, constLambda):
+  def __init__(self,A_train, C_train):
     self.cbp = []
-    self.alpha = alpha
-    self.constLambda = constLambda
+    self.alpha = None
+    self.constLambda = None
     self.weights = []
     self.A_train = A_train
-
     self.transformer = LabelEncode([-1,1])
     self.transformer.fit(C_train)
     self.C_train = self.transformer.transform(C_train)
@@ -438,10 +467,14 @@ class refrenced_method(object):
 
   def _train(self, A_train, C_train):
     self.cbp = CBP(A_train, C_train)
+
+  def fit(self, alpha, constLambda):
+    self.alpha = alpha
+    self.constLambda = constLambda
     self.weights = np.zeros(self.cbp.count)
-    A = np.zeros(shape = (len(A_train), self.cbp.count))
-    for i in range(len(A_train)):
-      A[i,:] = self.baseClassifier(A_train[i])
+    A = np.zeros(shape = (len(self.A_train), self.cbp.count))
+    for i in range(len(self.A_train)):
+      A[i,:] = self.baseClassifier(self.A_train[i])
     initialWeights = np.repeat(1/self.cbp.count, self.cbp.count)
     self.weights = np.matmul(self.constLambda**2*initialWeights + np.matmul(np.transpose(A), self.C_train),
                              np.linalg.inv(np.matmul(np.transpose(A), A) + np.identity(self.cbp.count)*self.constLambda**2)
@@ -474,16 +507,19 @@ class refrenced_method(object):
 
 
 class GPSVM(object):
-  def __init__(self,A_train, C_train, args):
+  def __init__(self,A_train, C_train):
     self.cbp = []
-    self.clusterNum = args[0]
+    self.clusterNum = []
     self.clusterCentroids = []
-    self.ensembleNum = args[1]
+    self.ensembleNum = []
     self.kmeans = []
     self.SVM = []
+    self.C = []
+    self.d = len(A_train[0])
     self.clusterLabel = []
     #[0,1] -> [1, -1]
-
+    self.A_train = A_train
+    self.C_train = C_train
     self.transformer = LabelEncode([-1,1])
     self.transformer.fit(C_train)
     self.C_train = self.transformer.transform(C_train)
@@ -492,20 +528,28 @@ class GPSVM(object):
 
   def _train(self, A_train, C_train):
     self.cbp = CBP(A_train, C_train)
+
+  def fit(self, args):
+    self.SVM = []
+    self.clusterNum = args[0]
+    self.ensembleNum = args[1]
+    self.C = args[2]
     if self.cbp.count < self.clusterNum:
       self.clusterNum = self.cbp.count
-    if self.ensembleNum > self.clusterNum:
-      self.ensembleNum = self.clusterNum
-
     self.kmeans = cluster.KMeans(n_clusters=self.clusterNum, random_state=0).fit(np.array(self.cbp.midpoints))
     self.clusterCentroids = self.kmeans.cluster_centers_
     self.clusterLabel= np.unique(self.kmeans.labels_)
+    # check if all clusters are generated
+    if self.clusterNum > len(np.unique(self.kmeans.labels_)):
+      self.clusterNum = len(np.unique(self.kmeans.labels_))
+    if self.ensembleNum > self.clusterNum:
+      self.ensembleNum = self.clusterNum
     for i in range(self.clusterNum):
       midpoints_subset_index = self.kmeans.labels_ == self.clusterLabel[i]
       Gabriel_pairs = np.array(self.cbp.points)[midpoints_subset_index]
       subset_index = Gabriel_pairs.reshape(-1)
-      model = svm.SVC(kernel='linear')
-      model.fit(A_train[subset_index], self.C_train[subset_index])
+      model = svm.SVC(kernel='linear', C = self.C)
+      model.fit(self.A_train[subset_index], self.C_train[subset_index])
       self.SVM.append(model)
 
   def ensemble(self, x):
@@ -523,7 +567,7 @@ class GPSVM(object):
       return -1
   def predict(self,x):
     ensembleVec = np.vectorize(self.ensemble, signature = '(n)->()')
-    predict = np.array(ensembleVec(np.array(x))).reshape(-1)
+    predict = np.array(ensembleVec(np.array(x).reshape(-1,self.d))).reshape(-1)
     #[1,-1] -> [0, 1]
     return self.transformer.transform_back(predict)
 
@@ -598,8 +642,8 @@ class GLSVM(object):
     else:
       return -1
   def predict(self,x):
-    ensembleVec = np.vectorize(self.ensemble, signature = '(n)->()')(x)
-    predict = ensembleVec(x)
+    ensembleVec = np.vectorize(self.ensemble, signature = '(n)->()')
+    predict = ensembleVec(np.array(x).reshape(-1,self.d))
     #[1,-1] -> [0, 1]
     return self.transformer.transform_back(predict)
 
