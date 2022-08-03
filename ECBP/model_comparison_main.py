@@ -746,7 +746,6 @@ def breastCancer_Data():
     return data
 
 def Diabetic_Data():
-    #too long/ no
     data = arff.loadarff('data/messidor_features.arff')
     df = pd.DataFrame(data[0])
     A_train = df.iloc[:,0:-1] 
@@ -771,7 +770,6 @@ def Bupa_liver_Data():
     return df
 
 def Heart_Disease_Dat():
-    # no
     df = pd.read_csv('data/processed.cleveland.data', header = None)
     df = df.replace('?', 'NaN').astype(float)
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
